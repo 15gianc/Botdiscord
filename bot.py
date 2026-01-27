@@ -167,7 +167,7 @@ async def info(ctx):
 
 # ¡NO OLVIDES PONER TU NUEVO TOKEN AQUÍ!
 # Primero ve al portal, haz Reset Token y copia el nuevo
-TOKEN = "MTQ2NTY0MTY3NTM1MDIxNjczNQ.GDdKXF.nkP1yMt8Xnad0zHKs4YiwvAxlCiuAhQ3M7GnA0"
+
 
 # Iniciar el bot
 load_dotenv()  # Carga el .env
