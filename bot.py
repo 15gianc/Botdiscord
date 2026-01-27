@@ -5,6 +5,7 @@ from discord import FFmpegPCMAudio
 import asyncio
 from dotenv import load_dotenv
 import os
+from keep_alive import keep_alive
 # Activar los intents necesarios (MUY importante)
 intents = discord.Intents.default()
 intents.message_content = True   # Permite leer el contenido de mensajes y comandos con prefijo
@@ -174,4 +175,5 @@ async def info(ctx):
 load_dotenv()  # Carga el .env
 TOKEN = os.getenv("TOKEN")  # Lee el token de .env
 
+keep_alive()
 bot.run(TOKEN)
