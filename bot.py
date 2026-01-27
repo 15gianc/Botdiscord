@@ -18,6 +18,7 @@ ytdl_format_options = {
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
     'restrictfilenames': True,
     'noplaylist': True,
+    'cookiefile': 'cookies.txt',
     'nocheckcertificate': True,
     'ignoreerrors': False,
     'logtostderr': False,
