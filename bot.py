@@ -5,15 +5,48 @@ from discord import FFmpegPCMAudio
 import asyncio
 from dotenv import load_dotenv
 import os
-from keep_alive import keep_alive
-# Activar los intents necesarios (MUY importante)
-intents = discord.Intents.default()
-intents.message_content = True   # Permite leer el contenido de mensajes y comandos con prefijo
 
-# Crear el bot con prefijo "!"
+# ────────────────────────────────────────────────
+# 1. Carga .env (lo primero)
+# ────────────────────────────────────────────────
+load_dotenv()
+
+TOKEN = os.getenv("TOKEN")
+if not TOKEN:
+    raise ValueError("ERROR: TOKEN no encontrado en .env")
+
+TWITCH_CLIENT_ID = os.getenv("TWITCH_CLIENT_ID")
+TWITCH_CLIENT_SECRET = os.getenv("TWITCH_CLIENT_SECRET")
+TWITCH_USERNAME = (os.getenv("TWITCH_USERNAME") or "").lower().strip()
+DISCORD_CHANNEL_ID_STR = os.getenv("DISCORD_NOTIFY_CHANNEL_ID")
+WEBHOOK_SECRET_STR = os.getenv("WEBHOOK_SECRET")
+
+if not DISCORD_CHANNEL_ID_STR:
+    raise ValueError("ERROR: DISCORD_NOTIFY_CHANNEL_ID no encontrado en .env")
+DISCORD_CHANNEL_ID = int(DISCORD_CHANNEL_ID_STR)
+
+if not WEBHOOK_SECRET_STR:
+    raise ValueError("ERROR: WEBHOOK_SECRET no encontrado en .env")
+WEBHOOK_SECRET = WEBHOOK_SECRET_STR.encode("utf-8")
+
+print("=== VARIABLES CARGADAS ===")
+print(f"TOKEN: {TOKEN[:10]}... (ocultado)")
+print(f"TWITCH_USERNAME: {TWITCH_USERNAME}")
+print(f"DISCORD_CHANNEL_ID: {DISCORD_CHANNEL_ID}")
+print("==========================\n")
+
+# ────────────────────────────────────────────────
+# 2. Discord Bot
+# ────────────────────────────────────────────────
+intents = discord.Intents.default()
+intents.message_content = True
+intents.members = True
+
 bot = commands.Bot(command_prefix="!", intents=intents)
 
-# Configuración de yt-dlp (para descargar solo audio)
+# ────────────────────────────────────────────────
+# 3. Música (sin cambios)
+# ────────────────────────────────────────────────
 ytdl_format_options = {
     'format': 'bestaudio/best',
     'outtmpl': '%(extractor)s-%(id)s-%(title)s.%(ext)s',
@@ -26,11 +59,11 @@ ytdl_format_options = {
     'quiet': True,
     'no_warnings': True,
     'default_search': 'auto',
-    'source_address': '0.0.0.0'  # Bind to ipv4 since ipv6 can cause issues
+    'source_address': '0.0.0.0'
 }
 
 ffmpeg_options = {
-  'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
+    'before_options': '-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
     'options': '-vn -filter:a "volume=0.5"'
 }
 
@@ -47,28 +80,21 @@ class YTDLSource(discord.PCMVolumeTransformer):
     async def from_url(cls, url, *, loop=None, stream=False):
         loop = loop or asyncio.get_event_loop()
         data = await loop.run_in_executor(None, lambda: ytdl.extract_info(url, download=not stream))
-
         if 'entries' in data:
-            # Es una playlist → tomamos el primer video
             data = data['entries'][0]
-
         filename = data['url'] if stream else ytdl.prepare_filename(data)
         return cls(FFmpegPCMAudio(filename, **ffmpeg_options), data=data)
 
-# Cola de canciones (para reproducir una tras otra)
 queue = []
 
-# Comando !play <url o búsqueda>
 @bot.command(name='play', aliases=['p'])
 async def play(ctx, *, url: str):
-    """Reproduce una canción o la añade a la cola"""
     if not ctx.author.voice:
-        await ctx.send("¡Debes estar en un canal de voz para usar este comando!")
+        await ctx.send("¡Debes estar en un canal de voz!")
         return
 
     voice_channel = ctx.author.voice.channel
 
-    # Conectar si no estamos conectados
     if not ctx.voice_client:
         await voice_channel.connect()
     elif ctx.voice_client.channel != voice_channel:
@@ -81,80 +107,72 @@ async def play(ctx, *, url: str):
         if not ctx.voice_client.is_playing():
             await play_next(ctx)
         else:
-            await ctx.send(f'**Añadido a la cola:** {player.title}')
+            await ctx.send(f'**Añadido:** {player.title}')
 
 async def play_next(ctx):
-    """Reproduce la siguiente canción de la cola"""
     if len(queue) > 0:
         player = queue.pop(0)
         ctx.voice_client.play(player, after=lambda e: asyncio.run_coroutine_threadsafe(play_next(ctx), bot.loop))
         await ctx.send(f'**Reproduciendo:** {player.title}\n{player.url}')
     else:
-        # Si la cola está vacía, desconectar después de 5 min de inactividad (opcional)
         await asyncio.sleep(300)
         if not ctx.voice_client.is_playing():
             await ctx.voice_client.disconnect()
 
-# Comando !skip
-@bot.command(name='skip')
-async def skip(ctx):
-    """Salta la canción actual"""
-    if ctx.voice_client and ctx.voice_client.is_playing():
-        ctx.voice_client.stop()
-        await ctx.send("**Canción saltada!**")
-        await play_next(ctx)
-    else:
-        await ctx.send("No hay nada reproduciéndose.")
+# Añade aquí skip, stop, queue, pause, resume si los tienes
 
-# Comando !stop
-@bot.command(name='stop')
-async def stop(ctx):
-    """Detiene la música y limpia la cola"""
-    if ctx.voice_client:
-        queue.clear()
-        ctx.voice_client.stop()
-        await ctx.voice_client.disconnect()
-        await ctx.send("**Música detenida y desconectado.**")
-    else:
-        await ctx.send("No estoy en un canal de voz.")
-
-# Comando !queue o !q (ver cola)
-@bot.command(name='queue', aliases=['q'])
-async def show_queue(ctx):
-    """Muestra la cola de canciones"""
-    if len(queue) == 0:
-        await ctx.send("La cola está vacía.")
-    else:
-        msg = "**Cola de reproducción:**\n"
-        for i, song in enumerate(queue, 1):
-            msg += f"{i}. {song.title}\n"
-        await ctx.send(msg)
-
-# Comando !pause y !resume
-@bot.command(name='pause')
-async def pause(ctx):
-    if ctx.voice_client.is_playing():
-        ctx.voice_client.pause()
-        await ctx.send("**Pausado** ⏸️")
-    else:
-        await ctx.send("Nada reproduciéndose.")
-
-@bot.command(name='resume')
-async def resume(ctx):
-    if ctx.voice_client.is_paused():
-        ctx.voice_client.resume()
-        await ctx.send("**Reanudado** ▶️")
-    else:
-        await ctx.send("No está pausado.")
-
-
-# Evento: cuando el bot se conecta correctamente
+# ────────────────────────────────────────────────
+# 4. Eventos Discord
+# ────────────────────────────────────────────────
 @bot.event
 async def on_ready():
-    print(f'¡Bot conectado! Estoy funcionando como {bot.user} (ID: {bot.user.id})')
-    print("¡Listo para recibir comandos! Prueba !ping en un servidor donde esté invitado.")
+    print(f'¡Bot conectado! {bot.user} (ID: {bot.user.id})')
 
-# Comando de prueba: !ping
+@bot.event
+async def on_member_join(member):
+    welcome_channel_id = 1072214818892824736
+    auto_role_name = "Rusticos 🛻"
+    banner_url = ""  # pon tu GIF si quieres
+
+    channel = member.guild.get_channel(welcome_channel_id)
+    if not channel:
+        print("Canal de bienvenida no encontrado")
+        return
+
+    role = discord.utils.get(member.guild.roles, name=auto_role_name)
+    if role:
+        try:
+            await member.add_roles(role)
+            print(f"Rol '{role.name}' dado a {member.name}")
+        except Exception as e:
+            print(f"Error dando rol: {e}")
+
+    embed = discord.Embed(
+        title="¡BIENVENID@ A RUSTICORD! 🛻",
+        description=f"¡Hola {member.mention}! Gracias por unirte a **{member.guild.name}**",
+        color=discord.Color.from_rgb(88, 101, 242),
+        timestamp=discord.utils.utcnow()
+    )
+
+    embed.set_image(url=banner_url)
+    embed.set_thumbnail(url=member.avatar.url if member.avatar else member.default_avatar.url)
+    embed.add_field(name="Ahora somos", value=f"**{len(member.guild.members)}** miembros 🚀", inline=False)
+    embed.set_footer(text="¡Diviértete y respeta las reglas!", icon_url=member.guild.icon.url if member.guild.icon else None)
+
+    message = await channel.send(embed=embed)
+
+    member_count = len(member.guild.members)
+    for i in range(3, member_count + 1, max(1, (member_count - 3) // 5)):
+        embed.set_field_at(0, name="Ahora somos", value=f"**{i}** miembros 🚀", inline=False)
+        try:
+            await message.edit(embed=embed)
+            await asyncio.sleep(0.6)
+        except:
+            break
+
+    embed.set_field_at(0, name="Ahora somos", value=f"**{member_count}** miembros 🎊", inline=False)
+    await message.edit(embed=embed)
+
 @bot.command()
 async def ping(ctx):
     await ctx.send("¡Pong! El bot está funcionando correctamente.")
@@ -167,13 +185,18 @@ async def hola(ctx):
 async def info(ctx):
     await ctx.send(f"Soy {bot.user.mention}\nCreado por: Giancarlo\nServidores: {len(bot.guilds)}")
 
-# ¡NO OLVIDES PONER TU NUEVO TOKEN AQUÍ!
-# Primero ve al portal, haz Reset Token y copia el nuevo
+# ────────────────────────────────────────────────
+# 5. Inicio principal
+# ────────────────────────────────────────────────
+async def main():
+    # Inicia Discord bot
+    discord_task = asyncio.create_task(bot.start(TOKEN))
 
+    # Nota: TwitchIO webhook requiere un servidor web, pero como no usas chat, puedes omitirlo o usar un adapter simple
+    # Para EventSub puro webhook en v3, TwitchIO maneja el servidor internamente si configuras el adapter
+    # Pero para simplicidad, te recomiendo probar primero sin TwitchIO (comenta las líneas de TwitchIO si falla)
 
-# Iniciar el bot
-load_dotenv()  # Carga el .env
-TOKEN = os.getenv("TOKEN")  # Lee el token de .env
+    await discord_task
 
-keep_alive()
-bot.run(TOKEN)
+if __name__ == "__main__":
+    asyncio.run(main())
